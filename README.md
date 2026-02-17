@@ -1,6 +1,7 @@
 # gh-whenreset
 
 A GitHub CLI extension that prints the latest local reset time among matching rate-limit buckets.
+Repository: https://github.com/renefritze/gh-whenreset
 
 ## Behavior
 
@@ -26,10 +27,10 @@ From a local clone:
 gh extension install .
 ```
 
-From GitHub (after publishing this repo as `gh-whenreset`):
+From GitHub:
 
 ```bash
-gh extension install <OWNER>/gh-whenreset
+gh extension install renefritze/gh-whenreset
 ```
 
 ## Usage
