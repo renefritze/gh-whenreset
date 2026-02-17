@@ -1,10 +1,13 @@
 # gh-whenreset
 
-A GitHub CLI extension that reads `gh api /rate_limit` JSON from stdin and prints the latest local reset time among matching rate-limit buckets.
+A GitHub CLI extension that prints the latest local reset time among matching rate-limit buckets.
 
 ## Behavior
 
-- Default: only exhausted buckets are considered (`remaining == 0`).
+- Input source:
+  - If stdin is piped, reads `gh api /rate_limit` JSON from stdin.
+  - If stdin is interactive, runs `gh api /rate_limit` automatically.
+- Default filter: only exhausted buckets are considered (`remaining == 0`).
 - `--all`: consider all buckets instead.
 - `--tz IANA_NAME`: override output timezone (for example `UTC` or `America/New_York`).
 
@@ -31,20 +34,26 @@ gh extension install <OWNER>/gh-whenreset
 
 ## Usage
 
-Default (only exhausted buckets):
+Default (auto-fetch from GitHub API):
 
 ```bash
-gh api /rate_limit | gh whenreset
+gh whenreset
 ```
 
 Consider all buckets:
 
 ```bash
-gh api /rate_limit | gh whenreset --all
+gh whenreset --all
 ```
 
 Force timezone:
 
 ```bash
-gh api /rate_limit | gh whenreset --tz UTC
+gh whenreset --tz UTC
+```
+
+Use pre-fetched JSON from stdin:
+
+```bash
+gh api /rate_limit | gh whenreset
 ```

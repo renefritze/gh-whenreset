@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import subprocess
 import sys
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -52,6 +53,41 @@ def load_input() -> dict:
     return data
 
 
+def load_from_gh_api() -> dict:
+    try:
+        result = subprocess.run(
+            ["gh", "api", "/rate_limit"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except FileNotFoundError:
+        print("Could not execute 'gh'. Ensure GitHub CLI is installed and on PATH.", file=sys.stderr)
+        sys.exit(1)
+
+    if result.returncode != 0:
+        err = result.stderr.strip() or "gh api /rate_limit failed."
+        print(err, file=sys.stderr)
+        sys.exit(result.returncode or 1)
+
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        print(f"Failed to parse JSON from gh api /rate_limit output: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    if not isinstance(data, dict):
+        print("gh api /rate_limit returned non-object JSON.", file=sys.stderr)
+        sys.exit(1)
+    return data
+
+
+def load_payload() -> dict:
+    if sys.stdin.isatty():
+        return load_from_gh_api()
+    return load_input()
+
+
 def considered_buckets(resources: dict, include_all: bool):
     for name, bucket in resources.items():
         if not isinstance(bucket, dict):
@@ -91,7 +127,7 @@ def main() -> int:
     args = parser.parse_args()
 
     tz = resolve_timezone(args.tz)
-    payload = load_input()
+    payload = load_payload()
 
     resources = payload.get("resources")
     if not isinstance(resources, dict):

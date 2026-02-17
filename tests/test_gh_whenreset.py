@@ -104,6 +104,27 @@ def test_load_input_non_object_exits_2(mod, monkeypatch, capsys):
     assert "Input JSON must be an object" in capsys.readouterr().err
 
 
+def test_load_payload_uses_gh_api_when_stdin_is_tty(mod, monkeypatch):
+    class DummyTTY:
+        def isatty(self):
+            return True
+
+    monkeypatch.setattr(sys, "stdin", DummyTTY())
+    monkeypatch.setattr(
+        mod,
+        "load_from_gh_api",
+        lambda: {"resources": {"core": {"remaining": 0, "reset": 1}}},
+    )
+    assert mod.load_payload() == {"resources": {"core": {"remaining": 0, "reset": 1}}}
+
+
+def test_load_payload_uses_stdin_when_not_tty(mod, monkeypatch):
+    expected = {"resources": {"search": {"remaining": 1, "reset": 2}}}
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{}"))
+    monkeypatch.setattr(mod, "load_input", lambda: expected)
+    assert mod.load_payload() == expected
+
+
 def test_resolve_timezone_invalid_exits_2(mod, capsys):
     with pytest.raises(SystemExit) as exc:
         mod.resolve_timezone("No/Such_TZ")
