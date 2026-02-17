@@ -11,20 +11,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          # Keep CI deterministic; avoid breakage from newly released Python majors/minors.
+          python-version: '3.13'
 
       - name: Install test dependencies
         run: python -m pip install --upgrade pip pytest
 
       - name: Run pytest unit tests
-        run: pytest -q
+        run: python -m pytest -q
 
       - name: Ensure script is executable
         run: chmod +x gh-whenreset
 
       - name: Default mode picks latest exhausted bucket
         run: |
-          output="$(cat fixtures/exhausted.json | ./gh-whenreset --tz UTC)"
+          output="$(./gh-whenreset --tz UTC < fixtures/exhausted.json)"
           echo "$output"
           echo "$output" | grep -q $'\\tgraphql\\t'
           echo "$output" | grep -Eq '(in [0-9]+(s|min|h|d)|[0-9]+(s|min|h|d) ago)$'
@@ -32,7 +33,7 @@ jobs:
       - name: Default mode exits 2 when no exhausted bucket exists
         run: |
           set +e
-          cat fixtures/no_exhausted.json | ./gh-whenreset >/tmp/out.txt 2>/tmp/err.txt
+          ./gh-whenreset < fixtures/no_exhausted.json >/tmp/out.txt 2>/tmp/err.txt
           code=$?
           set -e
           test "$code" -eq 2
@@ -40,7 +41,7 @@ jobs:
 
       - name: --all considers all buckets and succeeds
         run: |
-          output="$(cat fixtures/no_exhausted.json | ./gh-whenreset --all --tz UTC)"
+          output="$(./gh-whenreset --all --tz UTC < fixtures/no_exhausted.json)"
           echo "$output"
           echo "$output" | grep -q $'\\tsearch\\t'
           echo "$output" | grep -Eq '(in [0-9]+(s|min|h|d)|[0-9]+(s|min|h|d) ago)$'
