@@ -1,0 +1,6 @@
+{
+  "resources": {
+    "core": {"limit": 5000, "remaining": 5, "reset": 1700000100},
+    "search": {"limit": 30, "remaining": 1, "reset": 1700000200}
+  }
+}

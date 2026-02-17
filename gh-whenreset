@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+
+import argparse
+import json
+import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+EXIT_NO_MATCH = 2
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="gh-whenreset",
+        description="Print the latest local reset timestamp from gh api /rate_limit JSON input.",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Consider all buckets instead of only exhausted (remaining == 0) buckets.",
+    )
+    parser.add_argument(
+        "--tz",
+        metavar="IANA_NAME",
+        help="IANA timezone name (e.g. America/New_York). Defaults to system local timezone.",
+    )
+    return parser
+
+
+def resolve_timezone(tz_name: str | None):
+    if tz_name is None:
+        return datetime.now().astimezone().tzinfo
+
+    try:
+        return ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        print(f"Invalid timezone: {tz_name}", file=sys.stderr)
+        sys.exit(EXIT_NO_MATCH)
+
+
+def load_input() -> dict:
+    try:
+        data = json.load(sys.stdin)
+    except json.JSONDecodeError as exc:
+        print(f"Failed to parse JSON from stdin: {exc}", file=sys.stderr)
+        sys.exit(EXIT_NO_MATCH)
+
+    if not isinstance(data, dict):
+        print("Input JSON must be an object.", file=sys.stderr)
+        sys.exit(EXIT_NO_MATCH)
+    return data
+
+
+def considered_buckets(resources: dict, include_all: bool):
+    for name, bucket in resources.items():
+        if not isinstance(bucket, dict):
+            continue
+
+        remaining = bucket.get("remaining")
+        reset = bucket.get("reset")
+        if not isinstance(remaining, int) or not isinstance(reset, int):
+            continue
+
+        if include_all or remaining == 0:
+            yield name, reset
+
+
+def format_relative(seconds_from_now: int) -> str:
+    absolute = abs(seconds_from_now)
+    if absolute < 60:
+        value = absolute
+        unit = "s"
+    elif absolute < 3600:
+        value = absolute // 60
+        unit = "min"
+    elif absolute < 86400:
+        value = absolute // 3600
+        unit = "h"
+    else:
+        value = absolute // 86400
+        unit = "d"
+
+    if seconds_from_now >= 0:
+        return f"in {value}{unit}"
+    return f"{value}{unit} ago"
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    tz = resolve_timezone(args.tz)
+    payload = load_input()
+
+    resources = payload.get("resources")
+    if not isinstance(resources, dict):
+        print("Input JSON is missing object field: resources", file=sys.stderr)
+        return EXIT_NO_MATCH
+
+    matches = list(considered_buckets(resources, include_all=args.all))
+    if not matches:
+        criterion = "all buckets" if args.all else "exhausted buckets (remaining == 0)"
+        print(f"No rate limit buckets matched: {criterion}.", file=sys.stderr)
+        return EXIT_NO_MATCH
+
+    bucket_name, latest_reset = max(matches, key=lambda item: item[1])
+    local_dt = datetime.fromtimestamp(latest_reset, tz=tz)
+    now_epoch = int(datetime.now(tz=tz).timestamp())
+    relative = format_relative(latest_reset - now_epoch)
+    print(f"{local_dt.isoformat()}\t{bucket_name}\t{relative}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

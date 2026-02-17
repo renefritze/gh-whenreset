@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  whenreset:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure script is executable
+        run: chmod +x gh-whenreset
+
+      - name: Default mode picks latest exhausted bucket
+        run: |
+          output="$(cat fixtures/exhausted.json | ./gh-whenreset --tz UTC)"
+          echo "$output"
+          echo "$output" | grep -q $'\\tgraphql\\t'
+          echo "$output" | grep -Eq '(in [0-9]+(s|min|h|d)|[0-9]+(s|min|h|d) ago)$'
+
+      - name: Default mode exits 2 when no exhausted bucket exists
+        run: |
+          set +e
+          cat fixtures/no_exhausted.json | ./gh-whenreset >/tmp/out.txt 2>/tmp/err.txt
+          code=$?
+          set -e
+          test "$code" -eq 2
+          grep -q "No rate limit buckets matched" /tmp/err.txt
+
+      - name: --all considers all buckets and succeeds
+        run: |
+          output="$(cat fixtures/no_exhausted.json | ./gh-whenreset --all --tz UTC)"
+          echo "$output"
+          echo "$output" | grep -q $'\\tsearch\\t'
+          echo "$output" | grep -Eq '(in [0-9]+(s|min|h|d)|[0-9]+(s|min|h|d) ago)$'
