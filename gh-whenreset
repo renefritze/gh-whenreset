@@ -14,12 +14,12 @@ EXIT_NO_MATCH = 2
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="gh-whenreset",
-        description="Print the latest local reset timestamp from gh api /rate_limit JSON input.",
+        description="Print local reset timestamps from gh api /rate_limit JSON input.",
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Consider all buckets instead of only exhausted (remaining == 0) buckets.",
+        help="Consider all buckets instead of only not-full (remaining < limit) buckets.",
     )
     parser.add_argument(
         "--tz",
@@ -98,8 +98,13 @@ def considered_buckets(resources: dict, include_all: bool):
         if not isinstance(remaining, int) or not isinstance(reset, int):
             continue
 
-        if include_all or remaining == 0:
-            yield name, reset
+        limit = bucket.get("limit")
+        if include_all:
+            yield name, remaining, limit, reset
+            continue
+
+        if isinstance(limit, int) and remaining < limit:
+            yield name, remaining, limit, reset
 
 
 def format_relative(seconds_from_now: int) -> str:
@@ -122,6 +127,23 @@ def format_relative(seconds_from_now: int) -> str:
     return f"{value}{unit} ago"
 
 
+def format_percentage_remaining(remaining: int, limit: int | None) -> str | None:
+    if not isinstance(limit, int) or limit <= 0 or remaining <= 0:
+        return None
+
+    percent = (remaining / limit) * 100
+    if percent.is_integer():
+        return f"{int(percent)}%"
+    return f"{percent:.1f}%"
+
+
+def format_local_display_time(local_dt: datetime, now_local_dt: datetime) -> str:
+    day_delta = (local_dt.date() - now_local_dt.date()).days
+    if day_delta >= 1:
+        return local_dt.strftime("%Y-%m-%d %H:%M")
+    return local_dt.strftime("%H:%M")
+
+
 def main() -> int:
     parser = build_parser()
     args = parser.parse_args()
@@ -134,17 +156,23 @@ def main() -> int:
         print("Input JSON is missing object field: resources", file=sys.stderr)
         return EXIT_NO_MATCH
 
-    matches = list(considered_buckets(resources, include_all=args.all))
+    matches = sorted(considered_buckets(resources, include_all=args.all), key=lambda item: item[3])
     if not matches:
-        criterion = "all buckets" if args.all else "exhausted buckets (remaining == 0)"
+        criterion = "all buckets" if args.all else "not-full buckets (remaining < limit)"
         print(f"No rate limit buckets matched: {criterion}.", file=sys.stderr)
         return EXIT_NO_MATCH
 
-    bucket_name, latest_reset = max(matches, key=lambda item: item[1])
-    local_dt = datetime.fromtimestamp(latest_reset, tz=tz)
-    now_epoch = int(datetime.now(tz=tz).timestamp())
-    relative = format_relative(latest_reset - now_epoch)
-    print(f"{local_dt.isoformat()}\t{bucket_name}\t{relative}")
+    bucket_width = max(len(bucket_name) for bucket_name, _remaining, _limit, _reset in matches)
+    now_local_dt = datetime.now(tz=tz)
+    now_epoch = int(now_local_dt.timestamp())
+    for bucket_name, remaining, limit, reset in matches:
+        local_dt = datetime.fromtimestamp(reset, tz=tz)
+        display_time = format_local_display_time(local_dt, now_local_dt)
+        relative = format_relative(reset - now_epoch)
+        percent = format_percentage_remaining(remaining, limit)
+        if percent is not None:
+            relative = f"{relative} ({percent} remaining)"
+        print(f"{display_time}  {bucket_name:<{bucket_width}}  {relative}")
     return 0
 
 

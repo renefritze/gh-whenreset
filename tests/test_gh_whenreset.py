@@ -53,17 +53,32 @@ def test_format_relative(mod, seconds, expected):
     assert mod.format_relative(seconds) == expected
 
 
-def test_considered_buckets_default_filters_exhausted(mod):
+@pytest.mark.parametrize(
+    "remaining,limit,expected",
+    [
+        (1, 30, "3.3%"),
+        (30, 30, "100%"),
+        (0, 30, None),
+        (1, 0, None),
+        (1, None, None),
+    ],
+)
+def test_format_percentage_remaining(mod, remaining, limit, expected):
+    assert mod.format_percentage_remaining(remaining, limit) == expected
+
+
+def test_considered_buckets_default_filters_not_full(mod):
     resources = {
-        "core": {"remaining": 0, "reset": 100},
-        "search": {"remaining": 1, "reset": 200},
-        "graphql": {"remaining": 0, "reset": 150},
+        "core": {"limit": 5000, "remaining": 5000, "reset": 100},
+        "search": {"limit": 30, "remaining": 1, "reset": 200},
+        "graphql": {"limit": 5000, "remaining": 0, "reset": 150},
         "invalid_type": "nope",
         "invalid_shape": {"remaining": "0", "reset": 300},
+        "missing_limit": {"remaining": 2, "reset": 120},
     }
     assert list(mod.considered_buckets(resources, include_all=False)) == [
-        ("core", 100),
-        ("graphql", 150),
+        ("search", 1, 30, 200),
+        ("graphql", 0, 5000, 150),
     ]
 
 
@@ -74,9 +89,9 @@ def test_considered_buckets_all_includes_all_valid(mod):
         "graphql": {"remaining": 2, "reset": 150},
     }
     assert list(mod.considered_buckets(resources, include_all=True)) == [
-        ("core", 100),
-        ("search", 200),
-        ("graphql", 150),
+        ("core", 0, None, 100),
+        ("search", 1, None, 200),
+        ("graphql", 2, None, 150),
     ]
 
 
@@ -141,13 +156,27 @@ def run_main(mod, monkeypatch, capsys, payload, *args):
     return code, captured.out.strip(), captured.err.strip()
 
 
-def test_main_default_uses_latest_exhausted_bucket(mod, monkeypatch, capsys):
+def split_columns(line: str) -> list[str]:
+    return re.split(r"\s{2,}", line.strip())
+
+
+def test_format_local_display_time(mod):
+    tz = ZoneInfo("UTC")
+    now_local = datetime(2026, 2, 19, 23, 50, tzinfo=tz)
+    same_day = datetime(2026, 2, 19, 23, 59, tzinfo=tz)
+    next_day = datetime(2026, 2, 20, 0, 10, tzinfo=tz)
+
+    assert mod.format_local_display_time(same_day, now_local) == "23:59"
+    assert mod.format_local_display_time(next_day, now_local) == "2026-02-20 00:10"
+
+
+def test_main_default_prints_all_not_full_buckets(mod, monkeypatch, capsys):
     now = int(datetime.now(tz=ZoneInfo("UTC")).timestamp())
     payload = {
         "resources": {
-            "core": {"remaining": 0, "reset": now + 300},
-            "search": {"remaining": 1, "reset": now + 1000},
-            "graphql": {"remaining": 0, "reset": now + 600},
+            "core": {"limit": 5000, "remaining": 5000, "reset": now + 300},
+            "search": {"limit": 30, "remaining": 1, "reset": now + 1000},
+            "graphql": {"limit": 5000, "remaining": 0, "reset": now + 600},
         }
     }
 
@@ -155,35 +184,53 @@ def test_main_default_uses_latest_exhausted_bucket(mod, monkeypatch, capsys):
     assert code == 0
     assert err == ""
 
-    parts = out.split("\t")
-    assert len(parts) == 3
-    timestamp, bucket, relative = parts
-    assert bucket == "graphql"
-    assert re.match(r"^(in \d+(s|min|h|d)|\d+(s|min|h|d) ago)$", relative)
-    parsed = datetime.fromisoformat(timestamp)
-    assert parsed.tzinfo is not None
+    lines = out.splitlines()
+    assert len(lines) == 2
+
+    first = split_columns(lines[0])
+    second = split_columns(lines[1])
+    assert first[1] == "graphql"
+    assert second[1] == "search"
+
+    for parts in (first, second):
+        assert len(parts) == 3
+        display_time, _bucket, _relative = parts
+        assert re.match(r"^(\d{2}:\d{2}|\d{4}-\d{2}-\d{2} \d{2}:\d{2})$", display_time)
+
+    assert re.match(r"^(in \d+(s|min|h|d)|\d+(s|min|h|d) ago)$", first[2])
+    assert re.match(
+        r"^(in \d+(s|min|h|d)|\d+(s|min|h|d) ago) \(\d+(\.\d+)?% remaining\)$",
+        second[2],
+    )
 
 
 def test_main_all_considers_all_buckets(mod, monkeypatch, capsys):
     now = int(datetime.now(tz=ZoneInfo("UTC")).timestamp())
     payload = {
         "resources": {
-            "core": {"remaining": 0, "reset": now + 120},
-            "search": {"remaining": 2, "reset": now + 900},
+            "core": {"limit": 5000, "remaining": 5000, "reset": now + 120},
+            "search": {"limit": 30, "remaining": 2, "reset": now + 900},
         }
     }
 
     code, out, err = run_main(mod, monkeypatch, capsys, payload, "--all", "--tz", "UTC")
     assert code == 0
     assert err == ""
-    assert "\tsearch\t" in out
+    lines = out.splitlines()
+    assert len(lines) == 2
+    first = split_columns(lines[0])
+    second = split_columns(lines[1])
+    assert first[1] == "core"
+    assert second[1] == "search"
+    assert first[2].endswith("(100% remaining)")
+    assert second[2].endswith("(6.7% remaining)")
 
 
-def test_main_no_exhausted_bucket_exits_2(mod, monkeypatch, capsys):
+def test_main_no_not_full_bucket_exits_2(mod, monkeypatch, capsys):
     payload = {
         "resources": {
-            "core": {"remaining": 3, "reset": 1700000000},
-            "search": {"remaining": 1, "reset": 1700000300},
+            "core": {"limit": 5000, "remaining": 5000, "reset": 1700000000},
+            "search": {"limit": 30, "remaining": 30, "reset": 1700000300},
         }
     }
 
